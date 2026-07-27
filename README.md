@@ -1,6 +1,7 @@
 # dtd.page
 
 책에서 고른 문구 3-5개를 표지 포함 Instagram carousel로 만드는 자동화 작업환경입니다.
+발행 이미지는 `minimalist-ui` 디자인으로 렌더링됩니다.
 
 ```bash
 uv sync

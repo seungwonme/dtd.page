@@ -10,4 +10,4 @@ else
   exit 127
 fi
 
-exec "$uv_bin" run python scripts/dtd.py "$@"
+exec "$uv_bin" run python -m scripts.dtd "$@"

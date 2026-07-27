@@ -31,6 +31,7 @@ PDF_ROOT = Path(
 PUBLIC_BASE_URL = os.environ.get("DTD_PUBLIC_BASE_URL", "https://seungwonme.github.io/dtd.page").rstrip("/")
 GRAPH_VERSION = os.environ.get("INSTAGRAM_GRAPH_VERSION", "v23.0")
 WIDTH, HEIGHT = 1080, 1350
+DESIGN_STYLE = "minimalist-ui"
 BACKGROUND = "#F5F0E8"
 INK = "#172238"
 MUTED = "#68707D"
@@ -166,64 +167,35 @@ def centered_x(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFon
 
 
 def render_post(data: dict[str, Any], output_root: Path | None = None) -> tuple[Path, dict[str, Any]]:
+    from scripts.design_compare import dominant_accent
+    from scripts.design_compare import extract_cover
+    from scripts.design_compare import palette
+    from scripts.design_compare import render_cover
+    from scripts.design_compare import render_quote
+
     output_root = output_root or ROOT / "docs/posts"
     destination = output_root / post_id(data)
     destination.mkdir(parents=True, exist_ok=True)
-    regular = font_path()
     title = data["book"]["title"].strip()
     author = data["book"]["author"].strip()
     slides: list[dict[str, str]] = []
-    total = len(data["quotes"]) + 1
+    cover = extract_cover(data)
+    accent = dominant_accent(cover)
+    colors = palette(DESIGN_STYLE, accent)
 
-    image = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((80, 75, 154, 89), radius=7, fill=ACCENT)
-    label_font = ImageFont.truetype(regular, 34)
-    brand_font = ImageFont.truetype(regular, 30)
-    draw.text((80, 130), "오늘의 문장", font=label_font, fill=MUTED)
-    wrapped, cover_font = fit_text(draw, title, max_width=820, max_height=520, max_size=108, min_size=56, spacing=22)
-    draw.multiline_text((80, 330), wrapped, font=cover_font, fill=INK, spacing=22)
-    draw.text((82, 930), author, font=ImageFont.truetype(regular, 42), fill=ACCENT)
-    draw.line((80, 1160, 1000, 1160), fill="#D7D1C8", width=2)
-    draw.text((80, 1205), "day to day, page by page", font=brand_font, fill=MUTED)
-    draw.text((910, 1205), f"01/{total:02d}", font=brand_font, fill=MUTED)
     cover_path = destination / "01-cover.png"
-    image.save(cover_path, optimize=True)
+    render_cover(DESIGN_STYLE, data, cover, colors).save(cover_path, optimize=True)
     slides.append({"file": cover_path.name, "alt_text": f"{title}, {author}. 오늘의 문장 표지"})
 
     for index, quote in enumerate(data["quotes"], start=2):
-        image = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((78, 78, 1002, 1272), radius=42, fill=WHITE)
-        draw.ellipse((100, 108, 126, 134), fill=ACCENT)
-        quote_text = f"“{quote['text'].strip()}”"
-        wrapped, quote_font = fit_text(
-            draw,
-            quote_text,
-            max_width=760,
-            max_height=650,
-            max_size=66,
-            min_size=38,
-            spacing=24,
-        )
-        box = draw.multiline_textbbox((0, 0), wrapped, font=quote_font, spacing=24)
-        text_height = box[3] - box[1]
-        draw.multiline_text((centered_x(draw, wrapped, quote_font, 24), (HEIGHT - text_height) // 2 - 70), wrapped, font=quote_font, fill=INK, spacing=24, align="center")
-        meta = title
-        page = str(quote.get("page", "")).strip()
-        if page:
-            meta = f"{meta} · p.{page}"
-        meta_font = ImageFont.truetype(regular, 31)
-        meta_wrapped = wrap_text(draw, meta, meta_font, 760)
-        draw.multiline_text((centered_x(draw, meta_wrapped, meta_font), 1085), meta_wrapped, font=meta_font, fill=MUTED, spacing=10, align="center")
-        draw.text((105, 1210), "dtd.page", font=brand_font, fill=MUTED)
-        draw.text((870, 1210), f"{index:02d}/{total:02d}", font=brand_font, fill=MUTED)
         slide_path = destination / f"{index:02d}-quote.png"
-        image.save(slide_path, optimize=True)
+        render_quote(DESIGN_STYLE, data, quote, index, colors).save(slide_path, optimize=True)
         slides.append({"file": slide_path.name, "alt_text": f"{title}에서 고른 문장 {index - 1}: {quote['text'].strip()}"})
 
     manifest = {
         "id": post_id(data),
+        "style": DESIGN_STYLE,
+        "accent_rgb": accent,
         "book": data["book"],
         "caption": str(data.get("caption", "")).strip() or f"{title}에서 오늘 마음에 머문 문장들.",
         "slides": slides,
@@ -280,7 +252,7 @@ def wait_for_urls(urls: list[str], timeout: int) -> None:
 
 def graph_post(path: str, payload: dict[str, str], token: str) -> dict[str, Any]:
     request = urllib.request.Request(
-        f"https://graph.facebook.com/{GRAPH_VERSION}/{path.lstrip('/')}",
+        f"https://graph.instagram.com/{GRAPH_VERSION}/{path.lstrip('/')}",
         data=urllib.parse.urlencode(payload).encode(),
         method="POST",
     )
@@ -290,6 +262,30 @@ def graph_post(path: str, payload: dict[str, str], token: str) -> dict[str, Any]
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace").replace(token, "[masked]")
         raise DtdError(f"Instagram API 오류 HTTP {exc.code}: {body[:600]}") from exc
+
+
+def graph_get(path: str, payload: dict[str, str], token: str) -> dict[str, Any]:
+    query = urllib.parse.urlencode(payload)
+    request = urllib.request.Request(f"https://graph.instagram.com/{GRAPH_VERSION}/{path.lstrip('/')}?{query}")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace").replace(token, "[masked]")
+        raise DtdError(f"Instagram API 오류 HTTP {exc.code}: {body[:600]}") from exc
+
+
+def wait_for_container(container_id: str, token: str, timeout: int = 120) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = graph_get(container_id, {"fields": "status_code,status", "access_token": token}, token)
+        status = str(response.get("status_code", ""))
+        if status == "FINISHED":
+            return
+        if status in {"ERROR", "EXPIRED"}:
+            raise DtdError(f"Instagram 컨테이너 준비 실패: {response.get('status', status)}")
+        time.sleep(5)
+    raise DtdError("Instagram 컨테이너 준비 시간이 초과되었습니다.")
 
 
 def publish_carousel(manifest: dict[str, Any], urls: list[str]) -> dict[str, Any]:
@@ -320,6 +316,7 @@ def publish_carousel(manifest: dict[str, Any], urls: list[str]) -> dict[str, Any
     creation_id = str(parent.get("id", ""))
     if not creation_id:
         raise DtdError("Instagram이 carousel container id를 반환하지 않았습니다.")
+    wait_for_container(creation_id, token)
     result = graph_post(f"{user_id}/media_publish", {"creation_id": creation_id, "access_token": token}, token)
     if not result.get("id"):
         raise DtdError("Instagram이 게시물 id를 반환하지 않았습니다.")
